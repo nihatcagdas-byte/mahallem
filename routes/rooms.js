@@ -1,7 +1,6 @@
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
-const { createRoomToken, createHMSRoom, listActivePeers } = require('../services/hms');
 const { validateText } = require('../services/moderation');
 const prisma = new PrismaClient();
 
@@ -31,7 +30,7 @@ router.post('/', auth, async (req, res) => {
     }
 
     // 100ms üzerinde oda oluştur
-    const hmsRoom = await createHMSRoom(name);
+
 
     const room = await prisma.room.create({
       data: {
@@ -41,8 +40,7 @@ router.post('/', auth, async (req, res) => {
         ageMax: parseInt(ageMax) || 18,
         maxUsers: parseInt(maxUsers) || 10,
         ownerId: req.user.userId,
-        inviteOnly: inviteOnly || false,
-        hmsRoomId: hmsRoom.id
+        inviteOnly: inviteOnly || false
       }
     });
 
