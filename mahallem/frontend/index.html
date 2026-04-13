@@ -546,8 +546,9 @@
 </div><!-- /#app -->
 <div id="toast" class="toast"></div>
 
-<!-- 100ms Web SDK -->
-<script src="https://cdn.jsdelivr.net/npm/@100mslive/hms-video-store@0.10.13/dist/index.umd.js"></script>
+<!-- Socket.io (backend'den otomatik gelir) -->
+<script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.4/dist/socket.io.min.js"></script>
+<script src="webrtc.js"></script>
 
 <script>
 // ════════════════════════════════════════
@@ -559,8 +560,8 @@ const API = 'https://RENDER_BACKEND_URL_BURAYA';
 let token   = localStorage.getItem('mh_token');
 let me      = JSON.parse(localStorage.getItem('mh_user') || 'null');
 let prevScr = 's-main';
-let hmsSDK  = null;
-let curSession = null;
+let voice   = null;   // MahallemVoice örneği
+let curSession  = null;
 let curRoomData = null;
 let rnValid = false;
 let allRooms = [];
@@ -743,74 +744,91 @@ function filterCat(el, cat) {
   renderRooms();
 }
 
-// ── Odaya katıl (100ms) ──────────────────
+// ── Odaya katıl (WebRTC) ─────────────────
 async function enterRoom(roomId, roomName) {
   try {
+    // Backend'den oturum kaydı al
     const data = await api('/api/rooms/' + roomId + '/join', 'POST');
-    curSession = data.sessionId;
+    curSession  = data.sessionId;
     curRoomData = data.room;
 
-    document.getElementById('room-title').textContent = roomName;
+    document.getElementById('room-title').textContent  = roomName;
+    document.getElementById('room-pcount').textContent = '1 kişi bağlı';
 
-    // 100ms SDK başlat
-    const hmsStore = new HMSReactiveStore();
-    hmsSDK = hmsStore.getHMSActions();
+    // WebRTC motorunu başlat
+    voice = new MahallemVoice(API);
 
-    hmsSDK.onError(err => {
-      console.error('100ms hata:', err);
-      toast('Bağlantı hatası: ' + err.message);
-    });
+    // Kullanıcı listesi değişince grid'i güncelle
+    voice.onUsersUpdate = (users) => {
+      renderPeerGrid(users);
+      document.getElementById('room-pcount').textContent = (users.length + 1) + ' kişi bağlı';
+    };
 
-    await hmsSDK.join({
-      userName: me?.username || 'misafir',
-      authToken: data.token
-    });
+    // Konuşma animasyonu
+    voice.onSpeaking = (socketId, speaking) => {
+      if (socketId === 'me') {
+        const myCard = document.getElementById('peer-me');
+        if (myCard) myCard.style.borderColor = speaking ? 'var(--p)' : 'var(--br)';
+      }
+    };
 
-    // Mikrofonu aç
-    await hmsSDK.setLocalAudioEnabled(true);
-    updatePeerGrid();
-
-    // Katılımcı değişim olaylarını dinle
-    hmsStore.subscribe(updatePeerGrid, selectPeers);
-
+    await voice.join(roomId, me?.username || 'misafir', me?.id || '');
     go('s-room');
+
   } catch (err) {
-    toast('Odaya girilemiyor: ' + err.message);
+    toast('⚠ ' + err.message, 4000);
   }
 }
 
-function updatePeerGrid() {
+function renderPeerGrid(peers) {
   const grid = document.getElementById('peer-grid');
-  if (!hmsSDK) return;
-  const peers = HMSReactiveStore.selectPeers ? [] : [];
-  document.getElementById('room-pcount').textContent = (peers.length || 1) + ' kişi bağlı';
+  const colors = ['#EDE9FE','#D1FAE5','#FEF3C7','#FCE7F3','#DBEAFE','#FFE4E6'];
+  const tcolors = ['#5B21B6','#065F46','#92400E','#831843','#1E40AF','#9F1239'];
+
+  const myInitials = (me?.username || 'BEN').slice(0,2).toUpperCase();
+  let html = `
+    <div id="peer-me" style="background:var(--card);border-radius:18px;border:2px solid var(--p);padding:14px;text-align:center;transition:border-color .2s">
+      <div style="width:44px;height:44px;border-radius:50%;background:#EDE9FE;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:#5B21B6;margin:0 auto 7px">${myInitials}</div>
+      <p style="font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${me?.username||'Sen'}</p>
+      <p style="font-size:10px;color:var(--p);margin-top:2px">konuşuyor</p>
+    </div>`;
+
+  peers.forEach((u, i) => {
+    const initials = u.username.slice(0,2).toUpperCase();
+    const c  = colors[i % colors.length];
+    const tc = tcolors[i % tcolors.length];
+    html += `
+      <div style="background:var(--card);border-radius:18px;border:2px solid ${u.speaking?'var(--p)':'var(--br)'};padding:14px;text-align:center;transition:border-color .2s" id="peer-${u.socketId}">
+        <div style="width:44px;height:44px;border-radius:50%;background:${c};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:${tc};margin:0 auto 7px">${initials}</div>
+        <p style="font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.username}</p>
+        <p style="font-size:10px;color:${u.speaking?'var(--p)':u.muted?'var(--d)':'var(--txt)'};margin-top:2px">${u.speaking?'konuşuyor':u.muted?'sessiz':'dinliyor'}</p>
+      </div>`;
+  });
+  grid.innerHTML = html;
 }
 
 async function toggleMic() {
+  if (!voice) return;
+  const enabled = voice.toggleMic();
   const btn = document.getElementById('mic-btn');
   const lbl = document.getElementById('mic-lbl');
-  if (hmsSDK) {
-    const cur = hmsSDK.getLocalPeer()?.audioEnabled;
-    await hmsSDK.setLocalAudioEnabled(!cur);
-    const now = !cur;
-    btn.className = 'mic-btn ' + (now ? 'mic-on pulse' : 'mic-off');
-    btn.textContent = now ? '🎙️' : '🚫';
-    lbl.textContent = now ? 'Mikrofon açık' : 'Mikrofon kapalı';
-  }
+  btn.className = 'mic-btn ' + (enabled ? 'mic-on pulse' : 'mic-off');
+  btn.textContent = enabled ? '🎙️' : '🚫';
+  lbl.textContent = enabled ? 'Mikrofon açık' : 'Mikrofon kapalı';
 }
 
 function toggleSpeaker() {
   const btn = document.getElementById('spk-btn');
-  btn.textContent = btn.textContent === '🔊' ? '🔇' : '🔊';
+  const muted = btn.textContent === '🔊';
+  btn.textContent = muted ? '🔇' : '🔊';
+  // Tüm audio elementlerini sessizleştir/aç
+  document.querySelectorAll('audio').forEach(a => { a.muted = muted; });
 }
 
 async function leaveAndGo() {
-  if (hmsSDK) {
-    try { await hmsSDK.leave(); } catch {}
-    hmsSDK = null;
-  }
+  if (voice) { voice.leave(); voice = null; }
   if (curSession && curRoomData) {
-    api('/api/rooms/' + curRoomData.id + '/leave', 'POST', { sessionId: curSession }).catch(() => {});
+    api('/api/rooms/' + curRoomData.id + '/leave', 'POST', { sessionId: curSession }).catch(()=>{});
   }
   curSession = null; curRoomData = null;
   go('s-main');
@@ -984,12 +1002,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// 100ms store helper (eksikse boş fonksiyon)
-const selectPeers = (store) => store?.peers || [];
-const HMSReactiveStore = window.HMSReactiveStore || class {
-  constructor() { this.getHMSActions = () => ({ join: async()=>{}, leave: async()=>{}, setLocalAudioEnabled: async()=>{}, onError: ()=>{} }); }
-  subscribe() {}
-};
 </script>
 </body>
 </html>

@@ -1,10 +1,14 @@
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
+const express  = require('express');
+const http     = require('http');
+const cors     = require('cors');
+const helmet   = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { initSocket } = require('./services/socket');
 
-const app = express();
+const app    = express();
+const server = http.createServer(app);
+initSocket(server);
 
 // ── Güvenlik ────────────────────────────────────
 app.use(helmet());
@@ -50,6 +54,4 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`MAHALLEM backend çalışıyor → port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`MAHALLEM çalışıyor → port ${PORT}`));
