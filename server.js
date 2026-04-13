@@ -36,6 +36,7 @@ app.use('/api/auth/register', rateLimit({
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/rooms', require('./routes/rooms'));
 app.use('/api/reports', require('./routes/reports'));
+app.use('/api/moderation', require('./routes/moderation'));
 app.use('/api/users', require('./routes/users'));
 
 // ── Health Check (Render uyku önleme) ────────────
