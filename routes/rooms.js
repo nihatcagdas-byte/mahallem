@@ -1,8 +1,8 @@
-const { getRoomCount } = require('../services/socket');
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { validateText } = require('../services/moderation');
+const { getRoomCount } = require('../services/socket');
 const prisma = new PrismaClient();
 
 // ── Tüm aktif odaları listele ────────────────────
@@ -13,7 +13,12 @@ router.get('/', auth, async (req, res) => {
       include: { owner: { select: { username: true } } },
       orderBy: { createdAt: 'desc' }
     });
-    res.json(rooms);
+    // Her odaya aktif kullanıcı sayısını ekle
+    const roomsWithCount = rooms.map(r => ({
+      ...r,
+      activeCount: getRoomCount(r.id)
+    }));
+    res.json(roomsWithCount);
   } catch (err) {
     res.status(500).json({ error: 'Odalar yüklenemedi.' });
   }
@@ -24,14 +29,10 @@ router.post('/', auth, async (req, res) => {
   try {
     const { name, category, ageMin, ageMax, maxUsers, inviteOnly } = req.body;
 
-    // İçerik filtresi
     const check = validateText(name, 'Oda adı');
     if (!check.valid) {
       return res.status(400).json({ error: check.reason });
     }
-
-    // 100ms üzerinde oda oluştur
-
 
     const room = await prisma.room.create({
       data: {
@@ -46,7 +47,6 @@ router.post('/', auth, async (req, res) => {
     });
 
     res.status(201).json(room);
-
   } catch (err) {
     console.error('Oda oluşturma hatası:', err);
     res.status(500).json({ error: 'Oda oluşturulamadı.' });
@@ -65,21 +65,17 @@ router.post('/:id/join', auth, async (req, res) => {
     if (!user) return res.status(404).json({ error: 'Kullanıcı bulunamadı.' });
     if (user.isBanned) return res.status(403).json({ error: 'Hesabın askıya alınmış.' });
 
-    // Yaş uyumluluk kontrolü
     if (user.age < room.ageMin || user.age > room.ageMax) {
       return res.status(403).json({
         error: `Bu oda ${room.ageMin}-${room.ageMax} yaş arası için oluşturulmuş.`
       });
     }
 
-    // Kapasite kontrolü
-const { getRoomCount } = require('../services/socket');
-const activeCount = getRoomCount(req.params.id);
-if (activeCount >= room.maxUsers) {
-  return res.status(409).json({ error: 'Oda dolu.' });
-}
+    const activeCount = getRoomCount(room.id);
+    if (activeCount >= room.maxUsers) {
+      return res.status(409).json({ error: 'Oda dolu.' });
+    }
 
-    // Günlük kullanım limiti kontrolü
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayUsage = await prisma.usageSession.aggregate({
@@ -89,24 +85,17 @@ if (activeCount >= room.maxUsers) {
     const usedMinutes = todayUsage._sum.durationMinutes || 0;
     if (usedMinutes >= user.dailyLimit) {
       return res.status(403).json({
-        error: `Günlük ${user.dailyLimit} dakika limitine ulaştın. Yarın tekrar deneyebilirsin.`
+        error: `Günlük ${user.dailyLimit} dakika limitine ulaştın.`
       });
     }
 
-    // 100ms token üret
-    const isHost = ['admin', 'moderator'].includes(user.role) || room.ownerId === user.id;
-    const token = createRoomToken(room.hmsRoomId, user.username, isHost ? 'host' : 'listener');
-
-    // Kullanım oturumu başlat
     const session = await prisma.usageSession.create({
       data: { userId: user.id, roomId: room.id }
     });
 
     res.json({
-      token,
-      roomId: room.hmsRoomId,
       sessionId: session.id,
-      room: { id: room.id, name: room.name, hmsRoomId: room.hmsRoomId }
+      room: { id: room.id, name: room.name }
     });
 
   } catch (err) {
@@ -137,7 +126,7 @@ router.post('/:id/leave', auth, async (req, res) => {
   }
 });
 
-// ── Oda sil (sadece sahip veya admin) ────────────
+// ── Oda sil ──────────────────────────────────────
 router.delete('/:id', auth, async (req, res) => {
   try {
     const room = await prisma.room.findUnique({ where: { id: req.params.id } });
