@@ -1,3 +1,4 @@
+const { getRoomCount } = require('../services/socket');
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
@@ -72,10 +73,11 @@ router.post('/:id/join', auth, async (req, res) => {
     }
 
     // Kapasite kontrolü
-    const peers = await listActivePeers(room.hmsRoomId).catch(() => []);
-    if (peers.length >= room.maxUsers) {
-      return res.status(409).json({ error: 'Oda dolu.' });
-    }
+const { getRoomCount } = require('../services/socket');
+const activeCount = getRoomCount(req.params.id);
+if (activeCount >= room.maxUsers) {
+  return res.status(409).json({ error: 'Oda dolu.' });
+}
 
     // Günlük kullanım limiti kontrolü
     const todayStart = new Date();
